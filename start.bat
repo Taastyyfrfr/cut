@@ -1,5 +1,5 @@
 @echo off
-title Concetto Biologico — Dermal Canvas
+title Concetto Biologico [Server]
 cd /d "%~dp0"
 
 echo ===================================================
@@ -15,10 +15,9 @@ if not exist "node_modules\" (
     echo.
 )
 
-echo Starting local exhibition server...
-:: Open browser after 1 second delay in background
+echo Starting local exhibition server on port 5173...
+:: Open browser after 2 seconds in background
 start "" cmd /c "timeout /t 2 /nobreak >nul & start http://localhost:5173"
 
 :: Run Vite development server
-call npm run dev -- --port 5173 --open
-pause
+call npx vite --port 5173 --strictPort
