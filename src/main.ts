@@ -1,29 +1,20 @@
 /**
  * Concetto Biologico — Dermal Canvas Installation
  * 
- * Unified Master Orchestrator:
- * - Dynamic heightfield trench carving with continuous non-uniform splines
- * - Strict devicePixelRatio support for razor-sharp high-DPI rendering
- * - Dual-material response: Uncut skin (roughness 0.95, SSS) vs Wet viscera/blood (roughness 0.05, shininess 128.0)
- * - Viscous fluid mechanics: lower-lip emission, slow crawl, thin glossy streaks
+ * Unified Master Application:
+ * - High-end visceral gallery installation (Lucio Fontana slash meets biological dermis)
+ * - 1:1 Pixel Coordinate Space with strict window.devicePixelRatio support
+ * - Dynamic gaping lens incision geometry with 150ms elastic pull
  * - Procedural Web Audio API sound synthesis
  * - Keyboard shortcuts: [Space] Regenerate, [S] Export capture, [M] Audio, [F] Fullscreen
  */
 
 import './style.css';
 import { AudioEngine } from './audio/audioEngine';
-import { TissueStrataManager } from './engine/strata';
-import { WoundManager } from './engine/wound';
-import { FluidEngine } from './engine/fluid';
-import { Heightfield } from './engine/heightfield';
 import { CanvasRenderer } from './engine/renderer';
 
 class BiologicalCanvasApp {
   private audioEngine: AudioEngine;
-  private strataManager: TissueStrataManager;
-  private woundManager: WoundManager;
-  private fluidEngine: FluidEngine;
-  private heightfield: Heightfield;
   private canvasRenderer: CanvasRenderer;
 
   // DOM Elements
@@ -33,14 +24,8 @@ class BiologicalCanvasApp {
   private regenFlash: HTMLElement | null;
 
   // Interaction State
-  private isPointerDown: boolean = false;
-  private lastPointerX: number = 0;
-  private lastPointerY: number = 0;
   private toastTimeout: number = 0;
   private idleTimer: number = 0;
-
-  // Frame timing
-  private lastFrameTime: number = performance.now();
 
   constructor() {
     this.container = document.getElementById('canvas-container')!;
@@ -48,37 +33,25 @@ class BiologicalCanvasApp {
     this.toastElement = document.getElementById('toast');
     this.regenFlash = document.getElementById('regen-flash');
 
-    const width = window.innerWidth;
-    const height = window.innerHeight;
-    const dpr = window.devicePixelRatio || 1;
-
-    // Initialize systems
+    // Initialize unified audio and rendering systems
     this.audioEngine = new AudioEngine();
-    this.strataManager = new TissueStrataManager();
-    this.woundManager = new WoundManager(this.strataManager);
-    this.fluidEngine = new FluidEngine(width, height);
-    this.heightfield = new Heightfield(width, height, dpr);
-    this.canvasRenderer = new CanvasRenderer(this.container, this.heightfield);
+    this.canvasRenderer = new CanvasRenderer(this.container, this.audioEngine);
 
     this.bindEvents();
-    this.startRenderLoop();
     this.resetIdleTimer();
   }
 
   private bindEvents(): void {
-    // Window Resize
+    // Window Resize with high-DPI scaling
     window.addEventListener('resize', () => {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      this.canvasRenderer.resize(w, h);
-      this.fluidEngine.resize(w, h);
+      this.canvasRenderer.resize(window.innerWidth, window.innerHeight);
     });
 
     // High-precision pointer events
     window.addEventListener('pointerdown', (e: PointerEvent) => this.onPointerDown(e), { passive: false });
     window.addEventListener('pointermove', (e: PointerEvent) => this.onPointerMove(e), { passive: false });
-    window.addEventListener('pointerup', (e: PointerEvent) => this.onPointerUp(e));
-    window.addEventListener('pointercancel', (e: PointerEvent) => this.onPointerUp(e));
+    window.addEventListener('pointerup', (_e: PointerEvent) => this.onPointerUp());
+    window.addEventListener('pointercancel', (_e: PointerEvent) => this.onPointerUp());
 
     // Prevent default touch scrolling/gestures
     window.addEventListener('touchstart', (e) => {
@@ -95,18 +68,11 @@ class BiologicalCanvasApp {
   private onPointerDown(e: PointerEvent): void {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
 
-    this.isPointerDown = true;
-    this.lastPointerX = e.clientX;
-    this.lastPointerY = e.clientY;
-
     // Unlock Web Audio API on first user gesture
     this.audioEngine.resumeIfNeeded();
 
     const pressure = e.pressure && e.pressure > 0 ? e.pressure : 1.0;
-    const now = performance.now();
-
-    this.heightfield.beginSlice(e.clientX, e.clientY, pressure);
-    this.woundManager.beginCut(e.clientX, e.clientY, now, pressure);
+    this.canvasRenderer.onPointerDown(e.clientX, e.clientY, pressure);
 
     document.body.classList.add('slicing');
     this.scalpelCursor?.classList.add('cutting');
@@ -117,60 +83,25 @@ class BiologicalCanvasApp {
   private onPointerMove(e: PointerEvent): void {
     const x = e.clientX;
     const y = e.clientY;
-    const now = performance.now();
-
-    // Normalized coordinates for shader directional light
-    const normX = x / window.innerWidth;
-    const normY = y / window.innerHeight;
-    this.canvasRenderer.setPointerPosition(normX, normY);
+    const pressure = e.pressure && e.pressure > 0 ? e.pressure : 1.0;
 
     // Update custom scalpel cursor
     if (this.scalpelCursor) {
       this.scalpelCursor.style.left = `${x}px`;
       this.scalpelCursor.style.top = `${y}px`;
-
-      const dx = x - this.lastPointerX;
-      const dy = y - this.lastPointerY;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      if (dist > 3) {
-        const angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI + 45;
-        this.scalpelCursor.style.transform = `translate(-4px, -28px) rotate(${angleDeg}deg)`;
-      }
     }
 
-    // Carve trench into heightfield and update wound geometry
-    if (this.isPointerDown) {
-      const pressure = e.pressure && e.pressure > 0 ? e.pressure : 1.0;
-      const sliceInfo = this.heightfield.addSlicePoint(x, y, pressure);
-      this.woundManager.addPoint(x, y, now, pressure);
-
-      if (sliceInfo) {
-        // Continuous scalpel shearing friction acoustics
-        this.audioEngine.updateSlice(sliceInfo.velocity, pressure);
-      }
+    const moveInfo = this.canvasRenderer.onPointerMove(x, y, pressure);
+    if (moveInfo && this.scalpelCursor) {
+      const angleDeg = (moveInfo.angle * 180) / Math.PI + 45;
+      this.scalpelCursor.style.transform = `translate(-4px, -28px) rotate(${angleDeg}deg)`;
     }
 
-    this.lastPointerX = x;
-    this.lastPointerY = y;
     this.resetIdleTimer();
   }
 
-  private onPointerUp(_e: PointerEvent): void {
-    if (!this.isPointerDown) return;
-    this.isPointerDown = false;
-
-    // Stop blade friction sound
-    this.audioEngine.stopSlice();
-
-    // Finalize trench & generate bridging connective strands
-    this.heightfield.endSlice();
-    const cut = this.woundManager.endCut(performance.now());
-
-    // Visceral membrane tension release thump
-    if (cut && cut.nodes.length >= 3) {
-      const lengthFactor = Math.min(cut.totalLength / 300, 1.5);
-      this.audioEngine.playTensionRelease(lengthFactor);
-    }
+  private onPointerUp(): void {
+    this.canvasRenderer.onPointerUp();
 
     document.body.classList.remove('slicing');
     this.scalpelCursor?.classList.remove('cutting');
@@ -202,13 +133,10 @@ class BiologicalCanvasApp {
   }
 
   /**
-   * Regenerate canvas: reset heightfield & fluids with a subtle pristine wipe
+   * Regenerate canvas: reset cuts & fluids with a subtle pristine wipe
    */
   private regenerateCanvas(): void {
-    this.heightfield.clear();
-    this.woundManager.clear();
-    this.fluidEngine.clear();
-    this.audioEngine.playRegeneration();
+    this.canvasRenderer.clear();
 
     if (this.regenFlash) {
       this.regenFlash.classList.add('flash');
@@ -255,42 +183,6 @@ class BiologicalCanvasApp {
     this.idleTimer = window.setTimeout(() => {
       document.body.classList.add('idle');
     }, 4000);
-  }
-
-  private startRenderLoop(): void {
-    const loop = (currentTime: number) => {
-      const dt = Math.min((currentTime - this.lastFrameTime) / 1000, 0.05);
-      this.lastFrameTime = currentTime;
-
-      // 1. Step spring-mass wound physics
-      this.woundManager.update(dt, currentTime);
-
-      // 2. Spawn viscous drips strictly from lower lip of cuts
-      this.fluidEngine.emitWoundSeepage(
-        this.woundManager.wounds,
-        currentTime,
-        () => this.audioEngine.playFluidDrip()
-      );
-      this.fluidEngine.update(dt);
-
-      // 3. Burn viscous drips and thin glossy streaks into heightfield simulation
-      for (const drip of this.fluidEngine.drips) {
-        this.heightfield.addFluidPoint(drip.pos.x, drip.pos.y, drip.radius, 0.85);
-        for (const pt of drip.streakPoints) {
-          this.heightfield.addStreakPoint(pt.x, pt.y, drip.radius * 0.6, 0.7);
-        }
-      }
-
-      // 4. Step heightfield fluid physics (pooling & viscous flow)
-      this.heightfield.updateFluidPhysics(dt);
-
-      // 5. Render WebGL scene with Sobel normal mapping and dual-material shading
-      this.canvasRenderer.render(currentTime / 1000);
-
-      requestAnimationFrame(loop);
-    };
-
-    requestAnimationFrame(loop);
   }
 }
 
