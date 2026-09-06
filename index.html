@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Concetto Biologico — Dermal Canvas</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path d='M20,10 L80,90' stroke='%23A50021' stroke-width='12' stroke-linecap='round'/></svg>" />
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div id="canvas-container"></div>
+
+      <!-- Custom Precision Scalpel Cursor -->
+      <div id="scalpel-cursor">
+        <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- Scalpel Blade -->
+          <path d="M6 30 L22 14 L28 8 L30 10 L24 16 L12 32 Z" fill="#E2E2E2" stroke="#999" stroke-width="0.8"/>
+          <!-- Sharpened Bevel Edge -->
+          <path d="M6 30 C10 26 16 18 28 8 L29 9 C18 18 12 28 6 30 Z" fill="#FFFFFF" opacity="0.95"/>
+          <!-- Blade Cutting Tip -->
+          <circle cx="6" cy="30" r="1.2" fill="#A50021"/>
+          <!-- Micro Axis Reticle -->
+          <line x1="3" y1="30" x2="9" y2="30" stroke="#888" stroke-width="0.5" opacity="0.6"/>
+          <line x1="6" y1="27" x2="6" y2="33" stroke="#888" stroke-width="0.5" opacity="0.6"/>
+        </svg>
+      </div>
+
+      <!-- Minimalist Contemporary Exhibition Plaque -->
+      <aside class="gallery-hud">
+        <h1 class="gallery-title">Concetto Biologico (Attese)</h1>
+        <p class="gallery-subtitle">Taut vellum, stratified dermis, arterial fluid</p>
+        <div class="gallery-shortcuts">
+          <span><span class="key-badge">Space</span> Regenerate</span>
+          <span><span class="key-badge">S</span> Export Capture</span>
+          <span><span class="key-badge">M</span> Audio</span>
+          <span><span class="key-badge">F</span> Fullscreen</span>
+        </div>
+      </aside>
+
+      <!-- Transient Toast Notification -->
+      <div id="toast"></div>
+
+      <!-- Canvas Wipe Flash Overlay -->
+      <div id="regen-flash"></div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
