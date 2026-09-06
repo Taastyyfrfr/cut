@@ -1,22 +1,28 @@
 /**
  * Concetto Biologico — Dermal Canvas Installation
  * 
- * Master Orchestrator:
+ * Unified Master Orchestrator:
  * - Dynamic heightfield trench carving with continuous non-uniform splines
- * - Movable directional gallery spotlight tracking
- * - Dual-material response (dry skin alabaster vs wet viscera/arterial crimson)
- * - Viscous fluid pooling & capillary wicking
- * - Procedural Web Audio synthesis
+ * - Strict devicePixelRatio support for razor-sharp high-DPI rendering
+ * - Dual-material response: Uncut skin (roughness 0.95, SSS) vs Wet viscera/blood (roughness 0.05, shininess 128.0)
+ * - Viscous fluid mechanics: lower-lip emission, slow crawl, thin glossy streaks
+ * - Procedural Web Audio API sound synthesis
  * - Keyboard shortcuts: [Space] Regenerate, [S] Export capture, [M] Audio, [F] Fullscreen
  */
 
 import './style.css';
 import { AudioEngine } from './audio/audioEngine';
+import { TissueStrataManager } from './engine/strata';
+import { WoundManager } from './engine/wound';
+import { FluidEngine } from './engine/fluid';
 import { Heightfield } from './engine/heightfield';
 import { CanvasRenderer } from './engine/renderer';
 
 class BiologicalCanvasApp {
   private audioEngine: AudioEngine;
+  private strataManager: TissueStrataManager;
+  private woundManager: WoundManager;
+  private fluidEngine: FluidEngine;
   private heightfield: Heightfield;
   private canvasRenderer: CanvasRenderer;
 
@@ -44,10 +50,14 @@ class BiologicalCanvasApp {
 
     const width = window.innerWidth;
     const height = window.innerHeight;
+    const dpr = window.devicePixelRatio || 1;
 
     // Initialize systems
     this.audioEngine = new AudioEngine();
-    this.heightfield = new Heightfield(width, height);
+    this.strataManager = new TissueStrataManager();
+    this.woundManager = new WoundManager(this.strataManager);
+    this.fluidEngine = new FluidEngine(width, height);
+    this.heightfield = new Heightfield(width, height, dpr);
     this.canvasRenderer = new CanvasRenderer(this.container, this.heightfield);
 
     this.bindEvents();
@@ -61,6 +71,7 @@ class BiologicalCanvasApp {
       const w = window.innerWidth;
       const h = window.innerHeight;
       this.canvasRenderer.resize(w, h);
+      this.fluidEngine.resize(w, h);
     });
 
     // High-precision pointer events
@@ -92,7 +103,10 @@ class BiologicalCanvasApp {
     this.audioEngine.resumeIfNeeded();
 
     const pressure = e.pressure && e.pressure > 0 ? e.pressure : 1.0;
+    const now = performance.now();
+
     this.heightfield.beginSlice(e.clientX, e.clientY, pressure);
+    this.woundManager.beginCut(e.clientX, e.clientY, now, pressure);
 
     document.body.classList.add('slicing');
     this.scalpelCursor?.classList.add('cutting');
@@ -103,8 +117,9 @@ class BiologicalCanvasApp {
   private onPointerMove(e: PointerEvent): void {
     const x = e.clientX;
     const y = e.clientY;
+    const now = performance.now();
 
-    // Update gallery directional light position in shader
+    // Normalized coordinates for shader directional light
     const normX = x / window.innerWidth;
     const normY = y / window.innerHeight;
     this.canvasRenderer.setPointerPosition(normX, normY);
@@ -123,10 +138,11 @@ class BiologicalCanvasApp {
       }
     }
 
-    // Carve trench into heightfield dynamically
+    // Carve trench into heightfield and update wound geometry
     if (this.isPointerDown) {
       const pressure = e.pressure && e.pressure > 0 ? e.pressure : 1.0;
       const sliceInfo = this.heightfield.addSlicePoint(x, y, pressure);
+      this.woundManager.addPoint(x, y, now, pressure);
 
       if (sliceInfo) {
         // Continuous scalpel shearing friction acoustics
@@ -148,9 +164,13 @@ class BiologicalCanvasApp {
 
     // Finalize trench & generate bridging connective strands
     this.heightfield.endSlice();
+    const cut = this.woundManager.endCut(performance.now());
 
     // Visceral membrane tension release thump
-    this.audioEngine.playTensionRelease(1.25);
+    if (cut && cut.nodes.length >= 3) {
+      const lengthFactor = Math.min(cut.totalLength / 300, 1.5);
+      this.audioEngine.playTensionRelease(lengthFactor);
+    }
 
     document.body.classList.remove('slicing');
     this.scalpelCursor?.classList.remove('cutting');
@@ -182,10 +202,12 @@ class BiologicalCanvasApp {
   }
 
   /**
-   * Regenerate canvas: reset heightfield to pristine state with subtle flash
+   * Regenerate canvas: reset heightfield & fluids with a subtle pristine wipe
    */
   private regenerateCanvas(): void {
     this.heightfield.clear();
+    this.woundManager.clear();
+    this.fluidEngine.clear();
     this.audioEngine.playRegeneration();
 
     if (this.regenFlash) {
@@ -240,10 +262,29 @@ class BiologicalCanvasApp {
       const dt = Math.min((currentTime - this.lastFrameTime) / 1000, 0.05);
       this.lastFrameTime = currentTime;
 
-      // 1. Step viscous fluid mechanics (pooling, gravity flow, capillary wicking)
+      // 1. Step spring-mass wound physics
+      this.woundManager.update(dt, currentTime);
+
+      // 2. Spawn viscous drips strictly from lower lip of cuts
+      this.fluidEngine.emitWoundSeepage(
+        this.woundManager.wounds,
+        currentTime,
+        () => this.audioEngine.playFluidDrip()
+      );
+      this.fluidEngine.update(dt);
+
+      // 3. Burn viscous drips and thin glossy streaks into heightfield simulation
+      for (const drip of this.fluidEngine.drips) {
+        this.heightfield.addFluidPoint(drip.pos.x, drip.pos.y, drip.radius, 0.85);
+        for (const pt of drip.streakPoints) {
+          this.heightfield.addStreakPoint(pt.x, pt.y, drip.radius * 0.6, 0.7);
+        }
+      }
+
+      // 4. Step heightfield fluid physics (pooling & viscous flow)
       this.heightfield.updateFluidPhysics(dt);
 
-      // 2. Render WebGL scene with dynamic normal mapping and dual-material shading
+      // 5. Render WebGL scene with Sobel normal mapping and dual-material shading
       this.canvasRenderer.render(currentTime / 1000);
 
       requestAnimationFrame(loop);

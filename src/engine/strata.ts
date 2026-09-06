@@ -1,10 +1,7 @@
 /**
  * Tissue Stratification:
- * Anatomical layers exposed upon incising the taut biological membrane:
- * 1. Epidermal perimeter (pale blanched margin, curled lip)
- * 2. Dermis (fibrous pink/red tissue with bridging collagen strands)
- * 3. Subcutaneous layer (soft, glistening yellow-white lipid globules)
- * 4. Core cavity (dark crimson void with ambient occlusion)
+ * 1. Subcutaneous Adipose lobules (lipid globules nestled in deep crevices)
+ * 2. Subtle Collagen Strands: 2-4 semi-translucent fibrous bezier threads spanning narrow sections
  */
 
 import { Vec2 } from './physics';
@@ -29,8 +26,7 @@ export interface LipidGlobule {
   center: Vec2;
   radius: number;
   baseRadius: number;
-  depth: number; // 0.0 to 1.0
-  hueShift: number;
+  depth: number;
   gloss: number;
   jigglePhase: number;
   jiggleAmp: number;
@@ -41,51 +37,56 @@ export class TissueStrataManager {
   public lipidGlobules: LipidGlobule[] = [];
 
   /**
-   * Procedurally generate bridging connective tissue fibers along a newly formed wound
+   * Exactly 2 to 4 subtle, semi-translucent fibrous bezier threads spanning narrow sections
    */
   public generateFibersForWound(
     nodes: { spinePos: Vec2; normal: Vec2; targetHalfWidth: number }[]
   ): CollagenFiber[] {
     const newFibers: CollagenFiber[] = [];
-    const count = Math.min(Math.max(Math.floor(nodes.length * 0.35), 4), 28);
+    if (nodes.length < 4) return newFibers;
+
+    // Strictly 2 to 4 subtle fibers
+    const count = Math.min(Math.max(Math.floor(2 + Math.random() * 2.5), 2), 4);
 
     for (let k = 0; k < count; k++) {
-      // Pick random node index along the wound, favoring ends and narrower sections
-      const nodeIdx = Math.floor(1 + Math.random() * (nodes.length - 2));
-      const node = nodes[nodeIdx];
-      if (!node) continue;
+      // Pick narrow sections near incision tips
+      const isStart = Math.random() > 0.5;
+      const nodeIdx = isStart
+        ? Math.floor(1 + Math.random() * Math.min(nodes.length * 0.35, 6))
+        : Math.floor(Math.max(nodes.length * 0.65, nodes.length - 7) + Math.random() * 4);
 
-      // Only generate fibers where cut gap is moderate
-      if (node.targetHalfWidth > 32) continue;
+      const clampedIdx = Math.min(Math.max(nodeIdx, 1), nodes.length - 2);
+      const node = nodes[clampedIdx];
+      if (!node) continue;
 
       const norm = node.normal;
       const leftAnchor = new Vec2(
-        node.spinePos.x - norm.x * (node.targetHalfWidth * (0.6 + Math.random() * 0.4)),
-        node.spinePos.y - norm.y * (node.targetHalfWidth * (0.6 + Math.random() * 0.4))
+        node.spinePos.x - norm.x * (node.targetHalfWidth * 0.85),
+        node.spinePos.y - norm.y * (node.targetHalfWidth * 0.85)
       );
       const rightAnchor = new Vec2(
-        node.spinePos.x + norm.x * (node.targetHalfWidth * (0.6 + Math.random() * 0.4)),
-        node.spinePos.y + norm.y * (node.targetHalfWidth * (0.6 + Math.random() * 0.4))
+        node.spinePos.x + norm.x * (node.targetHalfWidth * 0.85),
+        node.spinePos.y + norm.y * (node.targetHalfWidth * 0.85)
       );
 
       const mid = new Vec2(
-        (leftAnchor.x + rightAnchor.x) * 0.5 + (Math.random() - 0.5) * 4.0,
-        (leftAnchor.y + rightAnchor.y) * 0.5 + (Math.random() - 0.5) * 4.0
+        (leftAnchor.x + rightAnchor.x) * 0.5 + (Math.random() - 0.5) * 3.0,
+        (leftAnchor.y + rightAnchor.y) * 0.5 + (Math.random() - 0.5) * 3.0
       );
 
       newFibers.push({
-        nodeIndex: nodeIdx,
+        nodeIndex: clampedIdx,
         anchorL: leftAnchor,
         anchorR: rightAnchor,
         currentMid: mid,
-        velocityMid: new Vec2((Math.random() - 0.5) * 60, (Math.random() - 0.5) * 60),
-        thickness: 0.75 + Math.random() * 1.5,
-        alpha: 0.75 + Math.random() * 0.25,
-        color: Math.random() > 0.4 ? '#E4A5AC' : '#F6D2D6', // Pale fibrous pink/cream
+        velocityMid: new Vec2((Math.random() - 0.5) * 20.0, (Math.random() - 0.5) * 20.0),
+        thickness: 0.8 + Math.random() * 0.4, // Delicate hairline
+        alpha: 0.45 + Math.random() * 0.25,  // Semi-translucent
+        color: 'rgba(215, 195, 198, 0.6)',   // Muted fibrous pink-ivory
         isSnapped: false,
         quiverPhase: Math.random() * Math.PI * 2,
-        quiverFreq: 18.0 + Math.random() * 14.0,
-        maxStretch: node.targetHalfWidth * 2.2 + 8.0,
+        quiverFreq: 22.0 + Math.random() * 12.0,
+        maxStretch: node.targetHalfWidth * 2.5 + 10.0,
       });
     }
 
@@ -94,54 +95,43 @@ export class TissueStrataManager {
   }
 
   /**
-   * Procedurally generate lipid globules (subcutaneous adipose clusters) along wound walls
+   * Procedural lipid lobules (subcutaneous adipose) clustered along deep crevice walls
    */
   public generateLipidsForWound(
-    nodes: { spinePos: Vec2; normal: Vec2; tangent?: Vec2; targetHalfWidth: number }[]
+    nodes: { spinePos: Vec2; normal: Vec2; targetHalfWidth: number }[]
   ): LipidGlobule[] {
     const newLipids: LipidGlobule[] = [];
 
-    for (let i = 1; i < nodes.length - 1; i++) {
+    for (let i = 2; i < nodes.length - 2; i += 2) {
       const node = nodes[i];
-      if (node.targetHalfWidth < 6) continue;
+      if (node.targetHalfWidth < 6.0) continue;
 
-      // 1 to 3 globules per node along both left and right inner shelves
-      const globuleCount = Math.floor(1 + Math.random() * 2.5);
-      for (let g = 0; g < globuleCount; g++) {
-        const side = Math.random() > 0.5 ? 1 : -1;
-        // Placed between 30% and 80% out from center spine towards edge
-        const distRatio = 0.25 + Math.random() * 0.55;
-        const offsetNorm = distRatio * node.targetHalfWidth;
-        const tangJitter = (Math.random() - 0.5) * 6.0;
+      const side = Math.random() > 0.5 ? 1 : -1;
+      const offsetNorm = node.targetHalfWidth * (0.35 + Math.random() * 0.35);
 
-        const pos = new Vec2(
-          node.spinePos.x + node.normal.x * (side * offsetNorm) + (node.normal.y * tangJitter),
-          node.spinePos.y + node.normal.y * (side * offsetNorm) - (node.normal.x * tangJitter)
-        );
+      const pos = new Vec2(
+        node.spinePos.x + node.normal.x * (side * offsetNorm),
+        node.spinePos.y + node.normal.y * (side * offsetNorm)
+      );
 
-        const r = 3.0 + Math.random() * 4.5;
+      const r = 2.2 + Math.random() * 2.8;
 
-        newLipids.push({
-          nodeIndex: i,
-          center: pos,
-          radius: r,
-          baseRadius: r,
-          depth: 0.55 + Math.random() * 0.35, // deeper in tissue
-          hueShift: (Math.random() - 0.5) * 0.15,
-          gloss: 0.85 + Math.random() * 0.15,
-          jigglePhase: Math.random() * Math.PI * 2,
-          jiggleAmp: 1.0,
-        });
-      }
+      newLipids.push({
+        nodeIndex: i,
+        center: pos,
+        radius: r,
+        baseRadius: r,
+        depth: 0.65 + Math.random() * 0.3,
+        gloss: 0.9,
+        jigglePhase: Math.random() * Math.PI * 2,
+        jiggleAmp: 1.0,
+      });
     }
 
     this.lipidGlobules.push(...newLipids);
     return newLipids;
   }
 
-  /**
-   * Update dynamic fibers and lipid jiggle
-   */
   public update(dt: number): void {
     const subDt = Math.min(dt, 0.033);
 
@@ -149,36 +139,32 @@ export class TissueStrataManager {
     for (const fiber of this.fibers) {
       if (fiber.isSnapped) continue;
 
-      // Distance between anchors
       const currentDist = fiber.anchorL.distanceTo(fiber.anchorR);
       if (currentDist > fiber.maxStretch) {
         fiber.isSnapped = true;
-        fiber.alpha = 0.2;
+        fiber.alpha = 0.15;
         continue;
       }
 
-      // Quiver dampening
       fiber.quiverPhase += fiber.quiverFreq * subDt;
       const targetMidX = (fiber.anchorL.x + fiber.anchorR.x) * 0.5;
       const targetMidY = (fiber.anchorL.y + fiber.anchorR.y) * 0.5;
 
-      // Spring-mass for fiber center
-      const fx = -45.0 * (fiber.currentMid.x - targetMidX) - 8.0 * fiber.velocityMid.x;
-      const fy = -45.0 * (fiber.currentMid.y - targetMidY) - 8.0 * fiber.velocityMid.y;
+      const fx = -45.0 * (fiber.currentMid.x - targetMidX) - 10.0 * fiber.velocityMid.x;
+      const fy = -45.0 * (fiber.currentMid.y - targetMidY) - 10.0 * fiber.velocityMid.y;
 
       fiber.velocityMid.x += fx * subDt;
       fiber.velocityMid.y += fy * subDt;
-
       fiber.currentMid.x += fiber.velocityMid.x * subDt;
       fiber.currentMid.y += fiber.velocityMid.y * subDt;
     }
 
-    // Update lipid globules jiggle
+    // Update lipid jiggle
     for (const lipid of this.lipidGlobules) {
       if (lipid.jiggleAmp > 0.01) {
         lipid.jigglePhase += 14.0 * subDt;
-        lipid.jiggleAmp *= Math.pow(0.88, subDt * 60); // exponential decay
-        lipid.radius = lipid.baseRadius * (1.0 + Math.sin(lipid.jigglePhase) * 0.08 * lipid.jiggleAmp);
+        lipid.jiggleAmp *= Math.pow(0.85, subDt * 60);
+        lipid.radius = lipid.baseRadius * (1.0 + Math.sin(lipid.jigglePhase) * 0.05 * lipid.jiggleAmp);
       }
     }
   }

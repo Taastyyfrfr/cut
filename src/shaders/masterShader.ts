@@ -1,16 +1,13 @@
 /**
  * Museum-Grade Dynamic Heightfield & Dual-Material Visceral Master Shader
  * 
- * Implements:
- * 1. Dynamic Surface Normal Mapping from Heightfield
- * 2. Movable Directional Light with Ambient Fill
- * 3. Dual-Material Response:
- *    - Dry Skin / Vellum: Roughness 0.95, Muted Alabaster (#E8DFD8), Red SSS Bleed
- *    - Wet Viscera & Blood: Roughness 0.05, Sharp Blinn-Phong Specular (n=420), Fresnel Sheen
- * 4. Contact Ambient Occlusion deep in crevices
- * 5. Visceral Blood Palette: Arterial Crimson (#7A0C16) to Clotted Burgundy (#220508)
- * 6. Fibrous Collagen Connective Strands
- * 7. Post-processing: 0.06 Film Grain, Soft Vignette, Micro-Chromatic Aberration on Specular Highlights
+ * 1. Smooth Normals: 8-tap Sobel filter on continuous heightfield (no crunchy artifacts)
+ * 2. Dual-Material Response:
+ *    - Uncut Skin: Base vec3(0.92, 0.88, 0.83), Roughness 0.95, SSS warm crimson bleed
+ *    - Cut Interior & Blood: Deep venous burgundy vec3(0.18, 0.02, 0.04), Roughness 0.05, Blinn-Phong specular (shininess 128.0)
+ * 3. Color Palette: Deep arterial crimson (#8B0C1A) to clotted burgundy (#58050E). Zero #FF0000.
+ * 4. Contact Ambient Occlusion deep in crevices.
+ * 5. Screen Space: 0.06 film noise overlay, soft vignette, micro-chromatic aberration on specular highlights.
  */
 
 export const vertexShader = /* glsl */ `
@@ -30,23 +27,18 @@ export const fragmentShader = /* glsl */ `
 
   varying vec2 vUv;
 
-  // Film grain hash
+  // Film noise hash
   float hash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
     p += dot(p, p + 45.32);
     return fract(p.x * p.y);
   }
 
-  // Micro surface noise for skin pores
-  float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    float a = hash(i);
-    float b = hash(i + vec2(1.0, 0.0));
-    float c = hash(i + vec2(0.0, 1.0));
-    float d = hash(i + vec2(1.0, 1.0));
-    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  // Micro-crease noise
+  float microPores(vec2 p) {
+    float n1 = hash(floor(p * 0.45));
+    float n2 = hash(floor(p * 0.9 + 17.0));
+    return (n1 * 0.6 + n2 * 0.4 - 0.5) * 0.015;
   }
 
   // Decode height from texture R channel [0, 1] -> [-1.0, 1.0]
@@ -54,61 +46,56 @@ export const fragmentShader = /* glsl */ `
     return byteVal * 2.0 - 1.0;
   }
 
+  // Sample composite surface elevation (height + liquid blood level)
+  float getElevation(vec2 uv) {
+    vec4 samp = texture2D(u_heightTexture, uv);
+    float h = decodeHeight(samp.r);
+    float fluid = samp.g * 0.12; // fluid elevation meniscus
+    return h + fluid;
+  }
+
   void main() {
     vec2 uv = vUv;
-    vec2 pixelCoord = uv * u_resolution;
+    vec2 pixelCoord = gl_FragCoord.xy;
     vec2 texel = 1.0 / u_resolution;
 
-    // Sample heightfield center and 4-point neighborhood
+    // Sample center heightfield attributes
     vec4 sampC = texture2D(u_heightTexture, uv);
-    vec4 sampL = texture2D(u_heightTexture, uv - vec2(texel.x * 1.5, 0.0));
-    vec4 sampR = texture2D(u_heightTexture, uv + vec2(texel.x * 1.5, 0.0));
-    vec4 sampD = texture2D(u_heightTexture, uv - vec2(0.0, texel.y * 1.5));
-    vec4 sampU = texture2D(u_heightTexture, uv + vec2(0.0, texel.y * 1.5));
-
-    // Decode heights
     float hC = decodeHeight(sampC.r);
-    float hL = decodeHeight(sampL.r);
-    float hR = decodeHeight(sampR.r);
-    float hD = decodeHeight(sampD.r);
-    float hU = decodeHeight(sampU.r);
-
-    // Fluid volume (Channel G)
     float fluidC = sampC.g;
-    float fluidL = sampL.g;
-    float fluidR = sampR.g;
-    float fluidD = sampD.g;
-    float fluidU = sampU.g;
-
-    // Capillary stain (Channel B)
     float stainC = sampC.b;
-
-    // Connective strands (Channel A)
     float strandC = sampC.a;
 
-    // Total effective surface elevation (including fluid pool and micro-skin texture)
-    float microPores = noise(pixelCoord * 0.45) * 0.018;
-    float zC = hC + fluidC * 0.18 + microPores;
-    float zL = hL + fluidL * 0.18;
-    float zR = hR + fluidR * 0.18;
-    float zD = hD + fluidD * 0.18;
-    float zU = hU + fluidU * 0.18;
+    // -------------------------------------------------------------
+    // 1. Smooth Normal Calculation: 8-tap Sobel Filter
+    // Eliminates faceted/crunchy artifacts completely
+    // -------------------------------------------------------------
+    vec2 e = texel * 2.0;
+    float tl = getElevation(uv + vec2(-e.x,  e.y));
+    float  l = getElevation(uv + vec2(-e.x,  0.0));
+    float bl = getElevation(uv + vec2(-e.x, -e.y));
+    float  t = getElevation(uv + vec2( 0.0,  e.y));
+    float  b = getElevation(uv + vec2( 0.0, -e.y));
+    float tr = getElevation(uv + vec2( e.x,  e.y));
+    float  r = getElevation(uv + vec2( e.x,  0.0));
+    float br = getElevation(uv + vec2( e.x, -e.y));
+
+    float dX = (tr + 2.0 * r + br) - (tl + 2.0 * l + bl);
+    float dY = (bl + 2.0 * b + br) - (tl + 2.0 * t + tr);
+
+    // Subtle micro skin pores
+    float pores = microPores(pixelCoord);
+    dX += pores * 0.4;
+    dY += pores * 0.4;
+
+    float normalStrength = 4.2;
+    vec3 normal = normalize(vec3(-dX * normalStrength, -dY * normalStrength, 1.0));
 
     // -------------------------------------------------------------
-    // 1. Dynamic Surface Normal Mapping
+    // 2. Movable Directional Light & View Geometry
     // -------------------------------------------------------------
-    float normalScale = 7.5;
-    vec3 normal = normalize(vec3(
-      (zL - zR) * normalScale,
-      (zD - zU) * normalScale,
-      1.0
-    ));
-
-    // -------------------------------------------------------------
-    // 2. Movable Directional Light Source with Ambient Fill
-    // -------------------------------------------------------------
-    vec3 lightPos = vec3(u_lightPos.xy, 0.65);
-    vec3 fragPos = vec3(uv, zC * 0.1);
+    vec3 lightPos = vec3(u_lightPos.xy, 0.72);
+    vec3 fragPos = vec3(uv, (hC + fluidC * 0.12) * 0.08);
     vec3 lightDir = normalize(lightPos - fragPos);
     vec3 viewDir = vec3(0.0, 0.0, 1.0);
     vec3 halfDir = normalize(lightDir + viewDir);
@@ -117,106 +104,102 @@ export const fragmentShader = /* glsl */ `
     float NdotH = max(dot(normal, halfDir), 0.0);
     float NdotV = max(dot(normal, viewDir), 0.0);
 
-    // Subtle gallery ambient term
-    vec3 ambientColor = vec3(0.14, 0.13, 0.12);
+    // Gallery ambient fill
+    vec3 ambient = vec3(0.12, 0.11, 0.10);
 
     // -------------------------------------------------------------
     // 3. Contact Ambient Occlusion deep inside cut crevice
     // -------------------------------------------------------------
     float trenchDepth = clamp(-hC, 0.0, 1.0);
-    // Dark multiply deep inside crevice before rendering internal fluid
-    float contactAO = clamp(1.0 - pow(trenchDepth, 1.35) * 0.94, 0.06, 1.0);
+    float contactAO = clamp(1.0 - pow(trenchDepth, 1.25) * 0.95, 0.05, 1.0);
 
     // -------------------------------------------------------------
-    // 4. Material 1: Dry Skin Surface (Matte Alabaster #E8DFD8)
+    // 4. Material 1: Uncut Skin Surface (Roughness 0.95)
+    // Base: vec3(0.92, 0.88, 0.83)
+    // SSS: dot(N, L) softened with warm crimson bleed
     // -------------------------------------------------------------
-    vec3 drySkinColor = vec3(0.910, 0.874, 0.847); // #E8DFD8
+    vec3 uncutSkinBase = vec3(0.92, 0.88, 0.83);
 
-    // Curled lip blanching: skin under tension blenches pale before severing
-    float curledLip = clamp(hC * 3.5, 0.0, 1.0);
-    drySkinColor = mix(drySkinColor, vec3(0.965, 0.955, 0.940), curledLip * 0.75);
+    // Curled lip tension blanching (raised lip +5% height)
+    float curledLip = clamp(hC * 4.0, 0.0, 1.0);
+    uncutSkinBase = mix(uncutSkinBase, vec3(0.96, 0.94, 0.91), curledLip * 0.7);
 
-    // Subsurface scattering (SSS): warm reddish bleed around backlit grazing angles
-    float sssTerm = pow(clamp(dot(viewDir, -(lightDir - normal * 0.4)), 0.0, 1.0), 3.5);
-    vec3 sssGlow = vec3(0.82, 0.14, 0.09) * sssTerm * 0.45;
+    // Subsurface scattering wrap & crimson rim bleed
+    float sssWrap = pow(clamp(1.0 - NdotV, 0.0, 1.0), 3.0);
+    vec3 sssBleed = vec3(0.65, 0.08, 0.05) * sssWrap * 0.45;
 
-    // Dry surface diffuse reflection (Roughness ~0.95, powdery soft wrap)
-    float skinDiffuse = pow(NdotL * 0.65 + 0.35, 1.2);
-    vec3 drySurfaceShaded = drySkinColor * (skinDiffuse + ambientColor) + sssGlow;
+    // Soft wrapped Lambertian diffuse for matte skin
+    float skinDiffuse = clamp(dot(normal, lightDir) * 0.65 + 0.35, 0.0, 1.0);
+    vec3 skinShaded = uncutSkinBase * (skinDiffuse + ambient) + sssBleed;
 
-    // -------------------------------------------------------------
-    // 5. Capillary Wicking (Porosity absorption along perimeter)
-    // -------------------------------------------------------------
-    if (stainC > 0.01) {
-      vec3 arterialCrimson = vec3(0.478, 0.047, 0.086); // #7A0C16
-      vec3 wickedTone = mix(drySurfaceShaded, arterialCrimson * 0.85, 0.92);
-      drySurfaceShaded = mix(drySurfaceShaded, wickedTone, stainC * 0.85);
+    // Capillary porous absorption into vellum fibers
+    if (stainC > 0.005) {
+      vec3 arterialStain = vec3(0.345, 0.020, 0.055); // #58050E
+      skinShaded = mix(skinShaded, arterialStain, clamp(stainC * 1.1, 0.0, 0.88));
     }
 
     // -------------------------------------------------------------
-    // 6. Material 2: Wet Viscera & Liquid Blood (Roughness ~0.05)
-    // Palette: Arterial Crimson (#7A0C16) -> Clotted Burgundy (#220508)
+    // 5. Material 2: Cut Interior & Blood (Roughness 0.05)
+    // Base: deep venous burgundy vec3(0.18, 0.02, 0.04)
+    // Palette strictly mapped between #58050E and #8B0C1A (NO #FF0000)
     // -------------------------------------------------------------
-    vec3 arterialCrimson = vec3(0.478, 0.047, 0.086); // #7A0C16
-    vec3 clottedBurgundy = vec3(0.133, 0.020, 0.031); // #220508
+    vec3 arterialCrimson = vec3(0.545, 0.047, 0.102); // #8B0C1A
+    vec3 clottedBurgundy = vec3(0.345, 0.020, 0.055); // #58050E
+    vec3 deepVenousBase  = vec3(0.180, 0.020, 0.040); // User specified deep venous burgundy
 
-    // Depth-based blood color modulation via Beer-Lambert absorption
-    float totalFluidDepth = fluidC + trenchDepth * 0.75;
-    vec3 bloodColor = mix(arterialCrimson, clottedBurgundy, smoothstep(0.15, 0.75, totalFluidDepth));
+    // Blood depth modulation: thin films = arterial, deep crevice/pools = clotted venous
+    vec3 bloodTone = mix(arterialCrimson, clottedBurgundy, smoothstep(0.1, 0.7, fluidC + trenchDepth * 0.5));
+    vec3 visceraColor = mix(deepVenousBase, bloodTone, clamp(fluidC * 1.8, 0.0, 1.0));
 
-    // Exposed structural dermis walls inside the trench
-    vec3 dermisColor = mix(vec3(0.58, 0.08, 0.12), clottedBurgundy, trenchDepth * 0.8);
-
-    // Composite wound interior with contact ambient occlusion
-    vec3 visceraBase = mix(dermisColor, bloodColor, clamp(fluidC * 1.5, 0.0, 1.0));
-    visceraBase *= contactAO;
+    // Dark contact ambient occlusion inside the trench
+    visceraColor *= contactAO;
 
     // -------------------------------------------------------------
-    // 7. Fibrous Connective Tissue Strands (Collagen bridging the gap)
+    // 6. Connective Tissue Strands (Collagen bridging the gap)
     // -------------------------------------------------------------
-    if (strandC > 0.02) {
-      vec3 collagenColor = vec3(0.92, 0.84, 0.85); // Pale pearlescent collagen
-      // Strands catch diffuse light
-      collagenColor *= (NdotL * 0.8 + 0.2);
-      visceraBase = mix(visceraBase, collagenColor, strandC * 0.88);
+    if (strandC > 0.01) {
+      vec3 collagenStrandColor = vec3(0.82, 0.74, 0.76); // Muted fibrous pink-ivory
+      collagenStrandColor *= (NdotL * 0.75 + 0.25);
+      visceraColor = mix(visceraColor, collagenStrandColor, clamp(strandC * 0.85, 0.0, 0.95));
     }
 
-    // Blend between Dry Skin Surface and Wound Interior based on trench depth & fluid presence
-    float isWound = smoothstep(0.02, 0.18, trenchDepth);
-    float isWet = max(isWound * 0.85, clamp(fluidC * 2.0, 0.0, 1.0));
+    // Blend between Dry Skin and Wound Interior based on trench depth & fluid presence
+    float isWound = smoothstep(0.04, 0.22, trenchDepth);
+    float isWet = max(isWound * 0.92, clamp(fluidC * 2.2, 0.0, 1.0));
 
-    vec3 compositeColor = mix(drySurfaceShaded, visceraBase, isWound);
-
-    // -------------------------------------------------------------
-    // 8. High Blinn-Phong Specular Gloss with Tight White Highlights
-    // -------------------------------------------------------------
-    float specGloss = pow(NdotH, 420.0); // Roughness ~0.05 (tight, sharp highlight)
-    float fresnel = 0.05 + 0.95 * pow(1.0 - NdotV, 5.0); // Schlick Fresnel for wet biological fluids
-
-    vec3 wetSpecular = vec3(1.0) * (specGloss * 1.8 + fresnel * 0.35) * isWet;
+    vec3 compositeColor = mix(skinShaded, visceraColor, isWound);
 
     // -------------------------------------------------------------
-    // 9. Micro-Chromatic Aberration Strictly along Specular Highlights
+    // 7. Blinn-Phong Specular Gloss (Shininess 128.0)
+    // Wet, glossy, fresh reflection of light source
     // -------------------------------------------------------------
-    if (specGloss > 0.05 && isWet > 0.2) {
-      vec2 specDisp = (lightPos.xy - uv) * 0.0035;
-      float specR = pow(max(dot(normalize(vec3((zL - zR) * normalScale + specDisp.x * 12.0, (zD - zU) * normalScale, 1.0)), halfDir), 0.0), 380.0);
-      float specB = pow(max(dot(normalize(vec3((zL - zR) * normalScale - specDisp.x * 12.0, (zD - zU) * normalScale, 1.0)), halfDir), 0.0), 380.0);
-      wetSpecular.r += specR * 0.75;
-      wetSpecular.b += specB * 0.75;
+    float specHighlight = pow(NdotH, 128.0); // Exactly 128.0 as requested
+    float fresnel = 0.04 + 0.96 * pow(clamp(1.0 - NdotV, 0.0, 1.0), 5.0);
+
+    vec3 wetSpecular = vec3(1.0) * (specHighlight * 1.8 + fresnel * 0.28) * isWet;
+
+    // -------------------------------------------------------------
+    // 8. Micro-Chromatic Aberration Strictly along Specular Highlights
+    // -------------------------------------------------------------
+    if (specHighlight > 0.06 && isWet > 0.25) {
+      vec2 specDisp = (lightPos.xy - uv) * 0.003;
+      float specR = pow(max(dot(normalize(normal + vec3(specDisp.x * 6.0, 0.0, 0.0)), halfDir), 0.0), 128.0);
+      float specB = pow(max(dot(normalize(normal - vec3(specDisp.x * 6.0, 0.0, 0.0)), halfDir), 0.0), 128.0);
+      wetSpecular.r += specR * 0.45;
+      wetSpecular.b += specB * 0.45;
     }
 
     compositeColor += wetSpecular;
 
     // -------------------------------------------------------------
-    // 10. Post-Processing: Film Grain (0.06 opacity) & Soft Vignette
+    // 9. Post-Processing: 0.06 Film Noise Overlay & Soft Vignette
     // -------------------------------------------------------------
     // Fine-grain film noise overlay (opacity ~0.06) to eliminate digital banding
-    float filmGrain = (hash(pixelCoord + fract(u_time * 1.6)) - 0.5) * 0.06;
-    compositeColor += filmGrain;
+    float filmNoise = (hash(pixelCoord + fract(u_time * 1.5)) - 0.5) * 0.06;
+    compositeColor += filmNoise;
 
     // Subtle vignette around borders to direct focus inward
-    float vignette = 1.0 - smoothstep(0.55, 1.42, length(uv - 0.5) * 1.25);
+    float vignette = 1.0 - smoothstep(0.55, 1.40, length(uv - 0.5) * 1.25);
     compositeColor *= (0.87 + vignette * 0.13);
 
     gl_FragColor = vec4(compositeColor, 1.0);

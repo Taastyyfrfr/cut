@@ -1,11 +1,13 @@
 /**
- * Dynamic Heightfield & Viscous Fluid Simulation Grid
+ * Dynamic Heightfield & Organic Trench Physics
  * 
- * Manages a high-resolution simulation grid:
- * Channel 0 (R): Surface Height & Trench Depth (baseline 0, curled lip +0.25, cut trench -1.0)
- * Channel 1 (G): Fluid Volume & Pooled Blood Depth
- * Channel 2 (B): Capillary Wicking / Porous Fiber Staining
- * Channel 3 (A): Connective Tissue / Collagen Strands Density
+ * 1. 1:1 Canvas resolution with bilinear filtering to prevent jagged/crunchy stepping.
+ * 2. Smooth organic cross-section profile:
+ *    - Parabolic trench floor (-100% depth)
+ *    - Raised curled outer lip (+5% height)
+ *    - Lenticular almond taper to needle-thin endpoints
+ * 3. Subtle connective tissue strands (2-4 fine fibers spanning narrow sections)
+ * 4. Viscous fluid mechanics (crevice pooling & slow viscous gravity flow)
  */
 
 import { Vec2 } from './physics';
@@ -35,8 +37,8 @@ export class Heightfield {
   public simHeight: number;
 
   // Packed simulation buffer: Float32Array [R, G, B, A]
-  // R: Height (trench < 0, lip > 0)
-  // G: Liquid blood volume
+  // R: Height (trench down to -1.0, curled lip up to +0.05)
+  // G: Fluid volume
   // B: Capillary stain
   // A: Connective strand mask
   public data: Float32Array;
@@ -46,35 +48,32 @@ export class Heightfield {
   public textureCtx: CanvasRenderingContext2D;
   public textureImageData: ImageData;
 
-  // Active connective tissue strands
+  // Active connective tissue strands (subtle, 2-4 fibers per cut)
   public strands: ConnectiveStrand[] = [];
 
-  // Procedural baseline micro-pores & skin creases
-  private noiseGrid: Float32Array;
-
-  // Active incision smoothing buffer
+  // Active stroke buffer
   private strokeBuffer: SlicePoint[] = [];
-  private totalStrokeLength: number = 0;
 
-  constructor(width: number, height: number) {
+  constructor(width: number, height: number, dpr: number = 1.0) {
     this.width = width;
     this.height = height;
 
-    // Simulation resolution (balanced for 60fps high-fidelity simulation)
-    // 1024 or 768 aspect ratio matching window
-    const maxDim = 1024;
-    const aspect = width / height;
-    if (aspect >= 1) {
-      this.simWidth = maxDim;
-      this.simHeight = Math.floor(maxDim / aspect);
+    // High resolution grid (matching physical viewport pixels, capped at 2048)
+    const targetW = Math.round(width * Math.min(dpr, 1.5));
+    const targetH = Math.round(height * Math.min(dpr, 1.5));
+    const maxDim = 2048;
+
+    if (targetW > maxDim || targetH > maxDim) {
+      const scale = maxDim / Math.max(targetW, targetH);
+      this.simWidth = Math.floor(targetW * scale);
+      this.simHeight = Math.floor(targetH * scale);
     } else {
-      this.simWidth = Math.floor(maxDim * aspect);
-      this.simHeight = maxDim;
+      this.simWidth = Math.max(targetW, 512);
+      this.simHeight = Math.max(targetH, 512);
     }
 
     const pixelCount = this.simWidth * this.simHeight;
     this.data = new Float32Array(pixelCount * 4);
-    this.noiseGrid = new Float32Array(pixelCount);
 
     this.textureCanvas = document.createElement('canvas');
     this.textureCanvas.width = this.simWidth;
@@ -82,73 +81,45 @@ export class Heightfield {
     this.textureCtx = this.textureCanvas.getContext('2d', { willReadFrequently: false })!;
     this.textureImageData = this.textureCtx.createImageData(this.simWidth, this.simHeight);
 
-    this.initSurfaceNoise();
+    this.clear();
   }
 
-  /**
-   * Procedural micro-perturbed height baseline (perlin/simplex dermatoglyphics & skin pores)
-   */
-  private initSurfaceNoise(): void {
-    const sw = this.simWidth;
-    const sh = this.simHeight;
-
-    for (let y = 0; y < sh; y++) {
-      for (let x = 0; x < sw; x++) {
-        const nx = x / sw;
-        const ny = y / sh;
-
-        // Fine dermatoglyphic skin creases & pores
-        const f1 = Math.sin(nx * 120.0 + Math.cos(ny * 90.0) * 2.0) * 0.5 + 0.5;
-        const f2 = Math.cos(nx * 280.0 - ny * 240.0) * 0.5 + 0.5;
-        const pore = Math.sin(nx * 600.0) * Math.cos(ny * 600.0);
-
-        const val = (f1 * 0.5 + f2 * 0.35 + pore * 0.15) * 0.04;
-        this.noiseGrid[y * sw + x] = val;
-
-        const idx = (y * sw + x) * 4;
-        this.data[idx] = val; // Baseline skin height
-        this.data[idx + 1] = 0; // Blood
-        this.data[idx + 2] = 0; // Stain
-        this.data[idx + 3] = 0; // Strands
-      }
-    }
-  }
-
-  public resize(width: number, height: number): void {
+  public resize(width: number, height: number, dpr: number = 1.0): void {
     if (this.width === width && this.height === height) return;
     this.width = width;
     this.height = height;
-    // Recreate grid
-    const maxDim = 1024;
-    const aspect = width / height;
-    if (aspect >= 1) {
-      this.simWidth = maxDim;
-      this.simHeight = Math.floor(maxDim / aspect);
+
+    const targetW = Math.round(width * Math.min(dpr, 1.5));
+    const targetH = Math.round(height * Math.min(dpr, 1.5));
+    const maxDim = 2048;
+
+    if (targetW > maxDim || targetH > maxDim) {
+      const scale = maxDim / Math.max(targetW, targetH);
+      this.simWidth = Math.floor(targetW * scale);
+      this.simHeight = Math.floor(targetH * scale);
     } else {
-      this.simWidth = Math.floor(maxDim * aspect);
-      this.simHeight = maxDim;
+      this.simWidth = Math.max(targetW, 512);
+      this.simHeight = Math.max(targetH, 512);
     }
 
     const pixelCount = this.simWidth * this.simHeight;
     this.data = new Float32Array(pixelCount * 4);
-    this.noiseGrid = new Float32Array(pixelCount);
 
     this.textureCanvas.width = this.simWidth;
     this.textureCanvas.height = this.simHeight;
     this.textureImageData = this.textureCtx.createImageData(this.simWidth, this.simHeight);
 
-    this.initSurfaceNoise();
+    this.clear();
   }
 
   public beginSlice(screenX: number, screenY: number, pressure: number = 1.0): void {
     const sx = (screenX / this.width) * this.simWidth;
     const sy = (screenY / this.height) * this.simHeight;
     this.strokeBuffer = [{ x: sx, y: sy, t: performance.now(), pressure }];
-    this.totalStrokeLength = 0;
   }
 
   /**
-   * Carve incision trench into heightmap using continuous non-uniform spline
+   * Add slice movement: carves organic trench with lenticular taper and raised curled lips
    */
   public addSlicePoint(screenX: number, screenY: number, pressure: number = 1.0): { velocity: number; normal: Vec2 } | null {
     if (this.strokeBuffer.length === 0) return null;
@@ -162,28 +133,25 @@ export class Heightfield {
     const dy = sy - last.y;
     const dist = Math.sqrt(dx * dx + dy * dy);
 
-    if (dist < 2.0) return null;
+    if (dist < 2.5) return null;
 
     const dt = Math.max((now - last.t) / 1000, 0.001);
     const velocity = dist / dt;
 
     this.strokeBuffer.push({ x: sx, y: sy, t: now, pressure });
-    this.totalStrokeLength += dist;
 
-    // Segment normal
     const tanX = dx / dist;
     const tanY = dy / dist;
     const normX = -tanY;
     const normY = tanX;
 
-    // Modulate width: dynamic velocity-based incision envelope
-    // Peak drag velocity creates widest wound, needle-thin start and ends
-    const speedFactor = Math.min(Math.max((velocity - 80) / 700, 0.3), 1.8);
-    const halfWidth = Math.min(Math.max((4.0 + speedFactor * 10.0) * pressure, 2.5), 24.0);
-    const trenchDepth = Math.min(0.75 + speedFactor * 0.25, 1.0);
+    // Smooth velocity modulation: widest at peak velocity, needle-thin at edges
+    const speedFactor = Math.min(Math.max((velocity - 60) / 650, 0.3), 1.6);
+    const halfWidth = Math.min(Math.max((5.0 + speedFactor * 10.0) * pressure, 3.0), 22.0);
+    const depth = Math.min(0.8 + speedFactor * 0.2, 1.0);
 
-    // Carve trench along segment from last to current point
-    this.carveSegmentTrench(last.x, last.y, sx, sy, normX, normY, halfWidth, trenchDepth, pressure);
+    // Carve trench segment
+    this.carveSmoothTrench(last.x, last.y, sx, sy, normX, normY, halfWidth, depth, pressure);
 
     return {
       velocity,
@@ -191,22 +159,21 @@ export class Heightfield {
     };
   }
 
-  /**
-   * Finalize slice on pointer up: needle-thin parabolic taper at the endpoints
-   */
   public endSlice(): void {
     if (this.strokeBuffer.length >= 2) {
-      // Generate fibrous connective tissue strands bridging the gap
-      this.generateConnectiveStrands();
+      // Spawn 2 to 4 subtle connective strands across narrow sections
+      this.generateSubtleStrands();
     }
     this.strokeBuffer = [];
-    this.totalStrokeLength = 0;
   }
 
   /**
-   * Carve trench with steep walls, curled lips, and contact ambient occlusion
+   * Carves a continuous smooth organic trench profile:
+   * - Smooth parabolic trench (-100% depth)
+   * - Raised slightly curled outer lip (+5% height)
+   * - Smooth zero slope transitions
    */
-  private carveSegmentTrench(
+  private carveSmoothTrench(
     x0: number, y0: number,
     x1: number, y1: number,
     normX: number, normY: number,
@@ -220,9 +187,9 @@ export class Heightfield {
     const dx = x1 - x0;
     const dy = y1 - y0;
     const segLen = Math.sqrt(dx * dx + dy * dy);
-    const steps = Math.max(Math.ceil(segLen / 1.5), 1);
+    const steps = Math.max(Math.ceil(segLen / 1.0), 1);
 
-    const influenceRadius = halfWidth * 1.85;
+    const influenceRadius = halfWidth * 1.5;
 
     for (let s = 0; s <= steps; s++) {
       const u = s / steps;
@@ -239,50 +206,50 @@ export class Heightfield {
           const rx = px - cx;
           const ry = py - cy;
 
-          // Distance along normal vector
+          // Distance along segment normal
           const distNorm = Math.abs(rx * normX + ry * normY);
-          // Distance along tangent vector
+          // Distance along segment tangent
           const distTang = Math.abs(rx * (-normY) + ry * normX);
 
-          if (distTang > 2.5) continue;
+          if (distTang > 1.8) continue;
           if (distNorm > influenceRadius) continue;
 
           const idx = (py * sw + px) * 4;
-          const baseH = this.noiseGrid[py * sw + px];
-
-          // -------------------------------------------------------------
-          // Organic Profile Function:
-          // Center: deep trench (height drops down to -depth)
-          // Edge (distNorm ~ halfWidth): curled lip rises to +0.22
-          // Beyond lip: decays back to baseline
-          // -------------------------------------------------------------
           const dRel = distNorm / halfWidth;
-          let targetH = baseH;
 
-          if (dRel < 1.0) {
-            // Inside trench: parabolic/cubic steep drop
-            const trenchShape = Math.pow(1.0 - dRel * dRel, 0.85);
-            targetH = -depth * trenchShape;
-          } else if (dRel < 1.6) {
-            // Curled epidermal lip: displaced tissue curls upward
-            const lipRel = (dRel - 1.0) / 0.6;
-            const lipHeight = Math.sin(lipRel * Math.PI) * 0.22 * depth;
-            targetH = baseH + lipHeight;
+          // -----------------------------------------------------------
+          // Organic Continuous Profile:
+          // 0.0 <= dRel <= 1.0: Parabolic trench down to -100% depth
+          // 1.0 < dRel <= 1.45: Raised curled outer lip (+5% height)
+          // -----------------------------------------------------------
+          let targetH = 0.0;
+
+          if (dRel <= 1.0) {
+            // Parabolic trench: -depth * (1.0 - dRel^2)
+            targetH = -depth * (1.0 - dRel * dRel);
+          } else if (dRel <= 1.45) {
+            // Raised curled outer lip: +5% height (+0.05)
+            const lipPhase = (dRel - 1.0) / 0.45;
+            targetH = 0.05 * Math.sin(lipPhase * Math.PI) * depth;
           }
 
-          // Apply minimum height (carve deeper)
-          this.data[idx] = Math.min(this.data[idx], targetH);
-
-          // Inject liquid blood inside the trench
-          if (dRel < 0.85) {
-            const bloodVol = (1.0 - (dRel / 0.85)) * 0.85 * pressure;
-            this.data[idx + 1] = Math.min(this.data[idx + 1] + bloodVol * 0.45, 1.0);
+          // Smoothly carve into heightfield (deepest depth wins)
+          if (targetH < 0.0) {
+            this.data[idx] = Math.min(this.data[idx], targetH);
+          } else if (this.data[idx] >= 0.0) {
+            this.data[idx] = Math.max(this.data[idx], targetH);
           }
 
-          // Capillary wicking into cold-press vellum fibers along lip
-          if (dRel > 0.8 && dRel < 1.7) {
-            const stainAmount = (1.0 - Math.abs(dRel - 1.25) / 0.45) * 0.55 * pressure;
-            this.data[idx + 2] = Math.min(this.data[idx + 2] + stainAmount, 1.0);
+          // Pool blood inside the trench bed
+          if (dRel < 0.75) {
+            const bloodVol = (1.0 - (dRel / 0.75)) * 0.75 * pressure;
+            this.data[idx + 1] = Math.min(this.data[idx + 1] + bloodVol * 0.35, 1.0);
+          }
+
+          // Subtle capillary wicking into porous vellum fibers along lip
+          if (dRel > 0.85 && dRel < 1.4) {
+            const stainAmount = (1.0 - Math.abs(dRel - 1.12) / 0.28) * 0.4 * pressure;
+            this.data[idx + 2] = Math.min(this.data[idx + 2] + stainAmount, 0.85);
           }
         }
       }
@@ -290,18 +257,25 @@ export class Heightfield {
   }
 
   /**
-   * Procedural fibrous, stringy connective tissue spanning across the gaping trench
+   * Exactly 2 to 4 subtle, semi-translucent fibrous connective strands spanning narrow sections
    */
-  private generateConnectiveStrands(): void {
+  private generateSubtleStrands(): void {
     const pts = this.strokeBuffer;
-    if (pts.length < 3) return;
+    if (pts.length < 4) return;
 
-    const count = Math.min(Math.max(Math.floor(pts.length * 0.35), 4), 32);
+    // Exactly 2 to 4 strands
+    const strandCount = Math.floor(2 + Math.random() * 2.5);
 
-    for (let i = 0; i < count; i++) {
-      const idx = Math.floor(1 + Math.random() * (pts.length - 2));
-      const pt = pts[idx];
-      const next = pts[idx + 1];
+    for (let k = 0; k < strandCount; k++) {
+      // Pick narrow sections near start or end
+      const isStart = Math.random() > 0.5;
+      const idx = isStart
+        ? Math.floor(1 + Math.random() * Math.min(pts.length * 0.35, 8))
+        : Math.floor(Math.max(pts.length * 0.65, pts.length - 8) + Math.random() * 4);
+
+      const clampedIdx = Math.min(Math.max(idx, 1), pts.length - 2);
+      const pt = pts[clampedIdx];
+      const next = pts[clampedIdx + 1];
 
       const dx = next.x - pt.x;
       const dy = next.y - pt.y;
@@ -311,37 +285,35 @@ export class Heightfield {
       const normX = -dy / len;
       const normY = dx / len;
 
-      const gap = 8.0 + Math.random() * 14.0;
-      const pA = new Vec2(pt.x - normX * gap, pt.y - normY * gap);
-      const pB = new Vec2(pt.x + normX * gap, pt.y + normY * gap);
+      const halfGap = 5.0 + Math.random() * 6.0;
+      const pA = new Vec2(pt.x - normX * halfGap, pt.y - normY * halfGap);
+      const pB = new Vec2(pt.x + normX * halfGap, pt.y + normY * halfGap);
       const mid = new Vec2(
-        (pA.x + pB.x) * 0.5 + (Math.random() - 0.5) * 4.0,
-        (pA.y + pB.y) * 0.5 + (Math.random() - 0.5) * 4.0
+        (pA.x + pB.x) * 0.5 + (Math.random() - 0.5) * 2.5,
+        (pA.y + pB.y) * 0.5 + (Math.random() - 0.5) * 2.5
       );
 
       this.strands.push({
         pA,
         pB,
         mid,
-        vel: new Vec2((Math.random() - 0.5) * 40.0, (Math.random() - 0.5) * 40.0),
-        thickness: 0.7 + Math.random() * 1.4,
-        alpha: 0.85 + Math.random() * 0.15,
+        vel: new Vec2((Math.random() - 0.5) * 25.0, (Math.random() - 0.5) * 25.0),
+        thickness: 0.8 + Math.random() * 0.4,
+        alpha: 0.45 + Math.random() * 0.25, // Subtle semi-translucent
         quiverPhase: Math.random() * Math.PI * 2,
-        quiverFreq: 22.0 + Math.random() * 16.0,
+        quiverFreq: 24.0 + Math.random() * 12.0,
       });
     }
 
-    // Rasterize strands into channel A of heightfield
-    this.rasterizeStrands();
+    this.rasterizeSubtleStrands();
   }
 
-  private rasterizeStrands(): void {
+  private rasterizeSubtleStrands(): void {
     const sw = this.simWidth;
     const sh = this.simHeight;
 
     for (const strand of this.strands) {
-      // Sample quadratic Bezier curve
-      const steps = 24;
+      const steps = 28;
       for (let s = 0; s <= steps; s++) {
         const u = s / steps;
         const inv = 1.0 - u;
@@ -352,32 +324,28 @@ export class Heightfield {
         const py = Math.floor(y);
         if (px >= 0 && px < sw && py >= 0 && py < sh) {
           const idx = (py * sw + px) * 4;
-          this.data[idx + 3] = Math.min(this.data[idx + 3] + strand.alpha * 0.8, 1.0);
+          this.data[idx + 3] = Math.min(this.data[idx + 3] + strand.alpha * 0.65, 0.9);
         }
       }
     }
   }
 
   /**
-   * Viscous fluid mechanics step:
-   * - Pools inside cut crevice
-   * - Retains surface tension (Laplacian diffusion)
-   * - Flows downward under gravity when overflowing
-   * - Capillary wicking into canvas fibers with irregular feathered edges
+   * Viscous fluid mechanics step
    */
   public updateFluidPhysics(dt: number): void {
     const subDt = Math.min(dt, 0.033);
     const sw = this.simWidth;
     const sh = this.simHeight;
 
-    // Update quivering strands
+    // Quiver strands
     for (const strand of this.strands) {
       strand.quiverPhase += strand.quiverFreq * subDt;
       const targetMidX = (strand.pA.x + strand.pB.x) * 0.5;
       const targetMidY = (strand.pA.y + strand.pB.y) * 0.5;
 
-      const fx = -50.0 * (strand.mid.x - targetMidX) - 10.0 * strand.vel.x;
-      const fy = -50.0 * (strand.mid.y - targetMidY) - 10.0 * strand.vel.y;
+      const fx = -45.0 * (strand.mid.x - targetMidX) - 10.0 * strand.vel.x;
+      const fy = -45.0 * (strand.mid.y - targetMidY) - 10.0 * strand.vel.y;
 
       strand.vel.x += fx * subDt;
       strand.vel.y += fy * subDt;
@@ -385,48 +353,93 @@ export class Heightfield {
       strand.mid.y += strand.vel.y * subDt;
     }
 
-    // Viscous fluid advection & capillary wicking (staggered sampling for performance)
-    const gravityRate = 12.0 * subDt;
-    const wickRate = 0.8 * subDt;
+    // Viscous fluid trickling & capillary percolation
+    const gravityRate = 8.0 * subDt; // High drag / viscous crawl
+    const wickRate = 0.5 * subDt;
 
     for (let y = sh - 2; y >= 1; y--) {
       const rowIdx = y * sw;
       for (let x = 1; x < sw - 1; x++) {
         const idx = (rowIdx + x) * 4;
         const blood = this.data[idx + 1];
-        if (blood < 0.01) continue;
+        if (blood < 0.015) continue;
 
         const h = this.data[idx];
 
-        // If fluid is in a deep crevice (h < -0.15), it stays pooled due to surface tension!
-        // If fluid exceeds crevice or is on a downward slope, gravity trickles it down (+Y)
-        if (h > -0.25) {
+        // Crevice pooling: if in deep trench, it pools.
+        // If overflowing the lip (h > -0.1), viscous flow crawls down (+Y)
+        if (h > -0.15) {
           const belowIdx = ((y + 1) * sw + x) * 4;
-          const flow = Math.min(blood * gravityRate * 0.65, 0.15);
+          const flow = Math.min(blood * gravityRate * 0.5, 0.08);
           this.data[idx + 1] -= flow;
           this.data[belowIdx + 1] = Math.min(this.data[belowIdx + 1] + flow, 1.0);
-
-          // Trail stain
-          this.data[idx + 2] = Math.min(this.data[idx + 2] + flow * 0.4, 0.95);
         }
 
-        // Capillary lateral wicking into surrounding porous canvas fibers
-        if (Math.random() < 0.15) {
+        // Capillary wicking
+        if (Math.random() < 0.12) {
           const leftIdx = (rowIdx + (x - 1)) * 4;
           const rightIdx = (rowIdx + (x + 1)) * 4;
-          this.data[leftIdx + 2] = Math.min(this.data[leftIdx + 2] + wickRate, 0.85);
-          this.data[rightIdx + 2] = Math.min(this.data[rightIdx + 2] + wickRate, 0.85);
+          this.data[leftIdx + 2] = Math.min(this.data[leftIdx + 2] + wickRate, 0.75);
+          this.data[rightIdx + 2] = Math.min(this.data[rightIdx + 2] + wickRate, 0.75);
         }
       }
     }
   }
 
   /**
-   * Pack simulation data into RGBA texture for WebGL sampling
-   * R: Height mapped to [0, 255] (trench -1.0 -> 0, baseline 0 -> 128, curled lip +0.25 -> 175)
-   * G: Fluid volume [0, 255]
-   * B: Capillary stain [0, 255]
-   * A: Connective tissue strands [0, 255]
+   * Stamp viscous teardrop fluid volume into heightfield
+   */
+  public addFluidPoint(screenX: number, screenY: number, radius: number, volume: number): void {
+    const cx = Math.floor((screenX / this.width) * this.simWidth);
+    const cy = Math.floor((screenY / this.height) * this.simHeight);
+    const r = Math.max(Math.ceil((radius / this.width) * this.simWidth), 1);
+    const sw = this.simWidth;
+    const sh = this.simHeight;
+
+    const minX = Math.max(0, cx - r);
+    const maxX = Math.min(sw - 1, cx + r);
+    const minY = Math.max(0, cy - r);
+    const maxY = Math.min(sh - 1, cy + r);
+
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const dx = x - cx;
+        const dy = y - cy;
+        const dSq = dx * dx + dy * dy;
+        if (dSq <= r * r) {
+          const falloff = 1.0 - Math.sqrt(dSq) / r;
+          const idx = (y * sw + x) * 4;
+          this.data[idx + 1] = Math.min(this.data[idx + 1] + volume * falloff * 0.45, 1.0);
+        }
+      }
+    }
+  }
+
+  /**
+   * Stamp thin glossy streak into heightfield
+   */
+  public addStreakPoint(screenX: number, screenY: number, radius: number, intensity: number): void {
+    const cx = Math.floor((screenX / this.width) * this.simWidth);
+    const cy = Math.floor((screenY / this.height) * this.simHeight);
+    const r = Math.max(Math.ceil((radius / this.width) * this.simWidth), 1);
+    const sw = this.simWidth;
+    const sh = this.simHeight;
+
+    const minX = Math.max(0, cx - r);
+    const maxX = Math.min(sw - 1, cx + r);
+    const minY = Math.max(0, cy - r);
+    const maxY = Math.min(sh - 1, cy + r);
+
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) {
+        const idx = (y * sw + x) * 4;
+        this.data[idx + 2] = Math.min(this.data[idx + 2] + intensity * 0.35, 0.9);
+      }
+    }
+  }
+
+  /**
+   * Upload simulation data to texture canvas
    */
   public updateTexture(): void {
     const pixels = this.textureImageData.data;
@@ -436,8 +449,7 @@ export class Heightfield {
       const srcIdx = i * 4;
       const dstIdx = i * 4;
 
-      // Height: map from [-1.0, 1.0] to [0, 255]
-      // -1.0 -> 0, 0.0 -> 128, +1.0 -> 255
+      // Height: [-1.0, 1.0] -> [0, 255]
       const h = this.data[srcIdx];
       const hByte = Math.min(Math.max(Math.floor((h + 1.0) * 127.5), 0), 255);
 
@@ -457,8 +469,7 @@ export class Heightfield {
   public clear(): void {
     this.strands = [];
     this.strokeBuffer = [];
-    this.totalStrokeLength = 0;
-    this.initSurfaceNoise();
+    this.data.fill(0);
     this.updateTexture();
   }
 }

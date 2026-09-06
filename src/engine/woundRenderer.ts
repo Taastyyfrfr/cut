@@ -1,11 +1,10 @@
 /**
- * Hyper-Realistic Wound Texture Renderer:
- * Rasterizes true-color anatomical tissue stratification:
- * 1. Epidermal perimeter: blanched pale tension halo (#FAF7EF), curled lip bevel & drop shadow
- * 2. Dermis: striated fibrous crimson matrix (#9E1A29 to #5C0A14) with weeping capillary petechiae
- * 3. Subcutaneous adipose: clustered 3D golden-ivory lipid lobules (#F8E8C0) with ambient occlusion
- * 4. Core cavity: deep pitch crimson-black void (#080002) with spatial ambient occlusion
- * 5. Collagen strands: quivering pearlescent bridging fibers (#F2CAD1) with tensile specular sheen
+ * Wound Texture Renderer (Synchronized with Heightfield & Visceral Palette)
+ * 
+ * 1. Organic almond/lenticular profiles with needle-thin start and end points.
+ * 2. Strictly deep arterial crimson (#8B0C1A) to clotted burgundy (#58050E).
+ * 3. Subtle, semi-translucent fibrous connective strands (2-4 fine bezier threads).
+ * 4. Soft subcutaneous lipid lobules with ambient occlusion drop shadows.
  */
 
 import type { WoundCut } from './wound';
@@ -34,7 +33,7 @@ export class WoundTextureRenderer {
   }
 
   /**
-   * Render stratified anatomy of all active wounds
+   * Render organic almond/lens profiles synchronized with the heightfield trench
    */
   public render(wounds: WoundCut[]): void {
     const ctx = this.ctx;
@@ -43,113 +42,53 @@ export class WoundTextureRenderer {
     if (wounds.length === 0) return;
 
     // -------------------------------------------------------------
-    // 1. Blanched Epidermal Perimeter (Pale ischemic halo under strain)
+    // 1. Organic Almond/Lens Profile (Deep Dermis & Crevice)
     // -------------------------------------------------------------
     ctx.save();
     for (const wound of wounds) {
-      if (wound.nodes.length < 2) continue;
+      const nodes = wound.nodes;
+      if (nodes.length < 3) continue;
 
+      // Almond contour path: left nodes forward, right nodes backward
       ctx.beginPath();
-      const pL0 = wound.nodes[0].getLeftPos();
+      const pL0 = nodes[0].getLeftPos();
       ctx.moveTo(pL0.x, pL0.y);
 
-      for (let i = 1; i < wound.nodes.length; i++) {
-        const p = wound.nodes[i].getLeftPos();
+      for (let i = 1; i < nodes.length; i++) {
+        const p = nodes[i].getLeftPos();
         ctx.lineTo(p.x, p.y);
       }
-      for (let i = wound.nodes.length - 1; i >= 0; i--) {
-        const p = wound.nodes[i].getRightPos();
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        const p = nodes[i].getRightPos();
         ctx.lineTo(p.x, p.y);
       }
       ctx.closePath();
 
-      // Outer blanched halo (diffuse tension stretch)
-      ctx.strokeStyle = 'rgba(255, 252, 246, 0.48)';
-      ctx.lineWidth = 15.0;
-      ctx.lineJoin = 'round';
-      ctx.stroke();
-
-      // Concentrated ischemic white rim (severed capillary blanching)
-      ctx.strokeStyle = 'rgba(255, 255, 252, 0.72)';
-      ctx.lineWidth = 6.0;
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // -------------------------------------------------------------
-    // 2. Dermis: Fibrous Deep Crimson Structural Tissue Matrix
-    // -------------------------------------------------------------
-    ctx.save();
-    for (const wound of wounds) {
-      if (wound.nodes.length < 2) continue;
-
-      // Outer wound contour
-      ctx.beginPath();
-      const pL0 = wound.nodes[0].getLeftPos();
-      ctx.moveTo(pL0.x, pL0.y);
-
-      for (let i = 1; i < wound.nodes.length; i++) {
-        const p = wound.nodes[i].getLeftPos();
-        ctx.lineTo(p.x, p.y);
-      }
-      for (let i = wound.nodes.length - 1; i >= 0; i--) {
-        const p = wound.nodes[i].getRightPos();
-        ctx.lineTo(p.x, p.y);
-      }
-      ctx.closePath();
-
-      // Rich living dermis crimson base
-      ctx.fillStyle = '#9E1A29';
+      // Deep arterial base: #8B0C1A transitioning to clotted #58050E
+      ctx.fillStyle = '#6E0812';
       ctx.fill();
 
-      // Curled lip inner shadow (depth bevel along severed dermal wall)
-      ctx.strokeStyle = 'rgba(50, 4, 9, 0.65)';
-      ctx.lineWidth = 3.5;
+      // Curled lip inner shadow (depth bevel along cut perimeter)
+      ctx.strokeStyle = '#380308';
+      ctx.lineWidth = 2.0;
       ctx.stroke();
 
-      // Directional fibrous striations along the cut
-      ctx.save();
-      ctx.clip(); // clip to wound interior
-      for (let i = 1; i < wound.nodes.length - 1; i += 2) {
-        const node = wound.nodes[i];
-        const pL = node.getLeftPos();
-        const pR = node.getRightPos();
-
-        // Striated collagen grain in dermis
-        ctx.beginPath();
-        ctx.moveTo(pL.x, pL.y);
-        ctx.lineTo(node.spinePos.x, node.spinePos.y);
-        ctx.strokeStyle = 'rgba(185, 38, 55, 0.35)';
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-
-        ctx.beginPath();
-        ctx.moveTo(pR.x, pR.y);
-        ctx.lineTo(node.spinePos.x, node.spinePos.y);
-        ctx.strokeStyle = 'rgba(185, 38, 55, 0.35)';
-        ctx.lineWidth = 1.2;
-        ctx.stroke();
-
-        // Petechiae: micro-dots of bright arterial blood weeping from capillaries
-        if (Math.random() < 0.35) {
-          ctx.fillStyle = 'rgba(215, 0, 35, 0.85)';
-          ctx.beginPath();
-          ctx.arc(
-            pL.x + node.normal.x * 2.5 + (Math.random() - 0.5) * 2,
-            pL.y + node.normal.y * 2.5 + (Math.random() - 0.5) * 2,
-            1.2 + Math.random() * 0.8,
-            0,
-            Math.PI * 2
-          );
-          ctx.fill();
-        }
+      // Deep central abyss slit along central spine
+      ctx.beginPath();
+      ctx.moveTo(nodes[0].spinePos.x, nodes[0].spinePos.y);
+      for (let i = 1; i < nodes.length; i++) {
+        ctx.lineTo(nodes[i].spinePos.x, nodes[i].spinePos.y);
       }
-      ctx.restore();
+      ctx.strokeStyle = '#220508'; // Clotted near-black burgundy
+      const avgGap = nodes.reduce((acc, n) => acc + (n.currentWidthL + n.currentWidthR) * 0.5, 0) / nodes.length;
+      ctx.lineWidth = Math.max(avgGap * 0.4, 2.0);
+      ctx.lineCap = 'round';
+      ctx.stroke();
     }
     ctx.restore();
 
     // -------------------------------------------------------------
-    // 3. Subcutaneous Layer: 3D Golden-Ivory Lipid Lobules (Adipose)
+    // 2. Subcutaneous Layer: 3D Soft Lipid Lobules
     // -------------------------------------------------------------
     ctx.save();
     for (const wound of wounds) {
@@ -157,81 +96,48 @@ export class WoundTextureRenderer {
         const r = lipid.radius;
         if (r <= 0.5) continue;
 
-        // Cast shadow behind lipid globule onto wound wall
-        ctx.fillStyle = 'rgba(20, 2, 4, 0.5)';
+        // Subtle shadow beneath lipid globule
+        ctx.fillStyle = 'rgba(25, 3, 6, 0.45)';
         ctx.beginPath();
-        ctx.arc(lipid.center.x + 1.2, lipid.center.y + 1.5, r * 1.05, 0, Math.PI * 2);
+        ctx.arc(lipid.center.x + 0.8, lipid.center.y + 1.2, r, 0, Math.PI * 2);
         ctx.fill();
 
-        // 3D Spherical gradient
+        // 3D Spherical lipid gradient (tallow ivory #E2CFAB)
         const grad = ctx.createRadialGradient(
           lipid.center.x - r * 0.35,
           lipid.center.y - r * 0.35,
-          r * 0.08,
+          r * 0.1,
           lipid.center.x,
           lipid.center.y,
           r
         );
-        grad.addColorStop(0, '#FFFBEB');  // Highlight
-        grad.addColorStop(0.35, '#F9E6B3'); // Buttery lipid body
-        grad.addColorStop(0.75, '#D5B56E'); // Adipose amber
-        grad.addColorStop(1, 'rgba(130, 90, 35, 0.9)'); // Shadow rim
+        grad.addColorStop(0, '#FFF6E0');
+        grad.addColorStop(0.4, '#E5D0A8');
+        grad.addColorStop(0.85, '#BFA36E');
+        grad.addColorStop(1, '#664E2A');
 
         ctx.fillStyle = grad;
         ctx.beginPath();
         ctx.arc(lipid.center.x, lipid.center.y, r, 0, Math.PI * 2);
         ctx.fill();
 
-        // Sharp moist specular glint on lipid surface
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.92)';
+        // Sharp moist specular glint
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
         ctx.beginPath();
-        ctx.arc(lipid.center.x - r * 0.32, lipid.center.y - r * 0.32, Math.max(r * 0.22, 0.8), 0, Math.PI * 2);
+        ctx.arc(lipid.center.x - r * 0.3, lipid.center.y - r * 0.3, Math.max(r * 0.22, 0.7), 0, Math.PI * 2);
         ctx.fill();
       }
     }
     ctx.restore();
 
     // -------------------------------------------------------------
-    // 4. Core Cavity: Deep Spatial Abyss & Ambient Occlusion
-    // -------------------------------------------------------------
-    ctx.save();
-    for (const wound of wounds) {
-      if (wound.nodes.length < 2) continue;
-
-      const nodes = wound.nodes;
-
-      // Deep ambient occlusion gradient along central spine
-      ctx.beginPath();
-      ctx.moveTo(nodes[0].spinePos.x, nodes[0].spinePos.y);
-      for (let i = 1; i < nodes.length; i++) {
-        ctx.lineTo(nodes[i].spinePos.x, nodes[i].spinePos.y);
-      }
-
-      const avgGap = nodes.reduce((acc, n) => acc + (n.currentWidthL + n.currentWidthR) * 0.5, 0) / nodes.length;
-
-      // Soft ambient occlusion penumbra
-      ctx.strokeStyle = 'rgba(18, 1, 3, 0.85)';
-      ctx.lineWidth = Math.max(avgGap * 0.72, 5.0);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.stroke();
-
-      // Deepest central slit void (Fontana spatial abyss)
-      ctx.strokeStyle = '#080002';
-      ctx.lineWidth = Math.max(avgGap * 0.35, 2.5);
-      ctx.stroke();
-    }
-    ctx.restore();
-
-    // -------------------------------------------------------------
-    // 5. Connective Strands: Bridging Collagen & Elastin Fibers
+    // 3. Subtle Connective Strands (2-4 fine semi-translucent bezier threads)
     // -------------------------------------------------------------
     ctx.save();
     for (const wound of wounds) {
       for (const fiber of wound.fibers) {
         if (fiber.isSnapped) continue;
 
-        // Curved catenary/spring drape through vibrating midpoint
         ctx.beginPath();
         ctx.moveTo(fiber.anchorL.x, fiber.anchorL.y);
         ctx.quadraticCurveTo(
@@ -241,16 +147,15 @@ export class WoundTextureRenderer {
           fiber.anchorR.y
         );
 
-        // Translucent pearlescent collagen strand
+        // Semi-translucent fine fibrous thread
         ctx.strokeStyle = fiber.color;
         ctx.lineWidth = fiber.thickness;
         ctx.lineCap = 'round';
-        ctx.globalAlpha = fiber.alpha;
         ctx.stroke();
 
-        // Crisp tensile specular glint line
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
-        ctx.lineWidth = Math.max(fiber.thickness * 0.45, 0.6);
+        // Subtle specular sheen line
+        ctx.strokeStyle = `rgba(255, 255, 255, ${fiber.alpha * 0.6})`;
+        ctx.lineWidth = Math.max(fiber.thickness * 0.4, 0.5);
         ctx.stroke();
       }
     }

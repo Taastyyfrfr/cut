@@ -1,7 +1,9 @@
 /**
  * Master WebGL Three.js Renderer for Biological Canvas Installation
+ * 
+ * Strictly accounts for window.devicePixelRatio to ensure crisp, razor-sharp rendering on high-DPI displays.
  * Couples custom GLSL fragment shaders with dynamic heightfield simulation:
- * - Dynamic surface normal mapping from heightfield
+ * - Dynamic surface normal mapping from heightfield (8-tap Sobel filter)
  * - Dual-material response (dry alabaster vellum vs wet viscera/blood)
  * - Directional light tracking with soft gallery inertia
  * - Contact ambient occlusion, micro-chromatic aberration, and 0.06 film noise
@@ -24,7 +26,7 @@ export class CanvasRenderer {
 
   public width: number = window.innerWidth;
   public height: number = window.innerHeight;
-  public dpr: number = Math.min(window.devicePixelRatio || 1, 2);
+  public dpr: number = window.devicePixelRatio || 1;
 
   // Movable gallery directional light position
   private lightTarget: THREE.Vector2 = new THREE.Vector2(0.5, 0.6);
@@ -33,13 +35,14 @@ export class CanvasRenderer {
   constructor(container: HTMLElement, heightfield: Heightfield) {
     this.container = container;
     this.heightfield = heightfield;
+    this.dpr = window.devicePixelRatio || 1;
 
-    // High-performance WebGL renderer
+    // High-performance WebGL renderer with exact high-DPI pixel ratio
     this.renderer = new THREE.WebGLRenderer({
       powerPreference: 'high-performance',
       antialias: true,
       alpha: false,
-      preserveDrawingBuffer: true, // required for high-res [S] frame capture
+      preserveDrawingBuffer: true,
     });
     this.renderer.setPixelRatio(this.dpr);
     this.renderer.setSize(this.width, this.height);
@@ -48,19 +51,20 @@ export class CanvasRenderer {
     this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     this.scene = new THREE.Scene();
 
-    // Heightfield texture
+    // Heightfield texture with linear filtering
     this.heightTexture = new THREE.CanvasTexture(this.heightfield.textureCanvas);
     this.heightTexture.minFilter = THREE.LinearFilter;
     this.heightTexture.magFilter = THREE.LinearFilter;
+    this.heightTexture.generateMipmaps = false;
     this.heightTexture.wrapS = THREE.ClampToEdgeWrapping;
     this.heightTexture.wrapT = THREE.ClampToEdgeWrapping;
 
-    // Master shader material
+    // Master shader material (u_resolution uses physical pixel dimensions)
     this.material = new THREE.ShaderMaterial({
       vertexShader,
       fragmentShader,
       uniforms: {
-        u_resolution: { value: new THREE.Vector2(this.width, this.height) },
+        u_resolution: { value: new THREE.Vector2(this.width * this.dpr, this.height * this.dpr) },
         u_time: { value: 0 },
         u_mouse: { value: new THREE.Vector2(0.5, 0.5) },
         u_lightPos: { value: new THREE.Vector3(0.5, 0.6, 0.65) },
@@ -78,23 +82,25 @@ export class CanvasRenderer {
   public setPointerPosition(normX: number, normY: number): void {
     const uvY = 1.0 - normY;
     this.material.uniforms.u_mouse.value.set(normX, uvY);
-
-    // Gallery directional light smoothly tracks pointer with soft inertia
     this.lightTarget.set(normX, uvY);
   }
 
   public resize(w: number, h: number): void {
     this.width = w;
     this.height = h;
-    this.renderer.setSize(w, h);
-    this.material.uniforms.u_resolution.value.set(w, h);
+    this.dpr = window.devicePixelRatio || 1;
 
-    this.heightfield.resize(w, h);
+    this.renderer.setPixelRatio(this.dpr);
+    this.renderer.setSize(w, h);
+    this.material.uniforms.u_resolution.value.set(w * this.dpr, h * this.dpr);
+
+    this.heightfield.resize(w, h, this.dpr);
 
     this.heightTexture.dispose();
     this.heightTexture = new THREE.CanvasTexture(this.heightfield.textureCanvas);
     this.heightTexture.minFilter = THREE.LinearFilter;
     this.heightTexture.magFilter = THREE.LinearFilter;
+    this.heightTexture.generateMipmaps = false;
     this.material.uniforms.u_heightTexture.value = this.heightTexture;
   }
 
